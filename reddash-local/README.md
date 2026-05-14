@@ -1,0 +1,273 @@
+<div align="center">
+
+# Context Surfaces Demos
+
+**Reusable demo apps powered by Redis Context Surfaces**
+
+Domain-specific demo apps for agentic workflows over structured Redis data,
+with full tool-call visibility in a dark-mode chat UI.
+
+[Getting Started](#getting-started) · [Architecture](#architecture) · [Demo Paths](#demo-paths)
+
+</div>
+
+---
+
+## What is this?
+
+Context Surfaces Demos is a multi-domain demo framework built around **Redis Context Surfaces**. The shared runtime shows how Context Surfaces turns Redis data into auto-generated [MCP](https://modelcontextprotocol.io/) tools that an AI agent can call. Instead of stuffing documents into a vector store and hoping the LLM figures it out, Context Surfaces gives agents **structured, scoped, real-time access** to operational data.
+
+The repo currently includes built-in demo domains for:
+
+- `reddash` — food-delivery support
+- `electrohub` — electronics retail and order support
+
+**Two modes, same UI:**
+
+| Mode | How it works | Best for |
+|------|-------------|----------|
+| **Context Surfaces** | LangGraph ReAct agent with 60+ auto-generated MCP tools | Multi-entity reasoning, real-time data |
+| **Simple RAG** | Vector search over policy docs → one-shot LLM answer | Showing the contrast |
+
+---
+
+## Prerequisites
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| [Python](https://python.org) | ≥ 3.11 | Backend + scripts |
+| [uv](https://docs.astral.sh/uv/) | latest | Python package manager |
+| [Node.js](https://nodejs.org) | ≥ 18 | Frontend |
+| [npm](https://npmjs.com) | ≥ 9 | Frontend dependencies |
+
+You will also need:
+
+- **OpenAI API key** — for embeddings and chat completions
+- **Redis Cloud** instance — host, port, and password
+- **Context Surfaces admin key** (`CTX_ADMIN_KEY`) — from the Context Surfaces console
+
+> The `context-surfaces` SDK ships with sensible defaults for API and MCP URLs. No extra URLs to configure.
+
+---
+
+## Getting Started
+
+### 1. Clone and configure
+
+```bash
+git clone https://github.com/<your-org>/context-surfaces-demos.git
+cd context-surfaces-demos
+cp .env.example .env
+```
+
+Edit `.env` and fill in three values:
+
+```env
+OPENAI_API_KEY=sk-...
+REDIS_HOST=redis-xxxxx.c1.us-east-1-2.ec2.redns.redis-cloud.com
+REDIS_PORT=12345
+REDIS_PASSWORD=your-redis-password
+CTX_ADMIN_KEY=your-admin-key
+```
+
+Everything else is auto-populated by later steps or has sensible defaults. The active domain defaults to `reddash`; you can override it with `DEMO_DOMAIN=<domain-id>` or `make ... DOMAIN=<domain-id>`.
+
+### 2. Install dependencies
+
+```bash
+make install
+```
+
+Runs `uv sync` (Python) and `npm install` (frontend).
+
+### 3. Generate models and sample data
+
+```bash
+make validate-domain DOMAIN=reddash
+make generate-models DOMAIN=reddash
+make generate-data DOMAIN=reddash
+```
+
+### 4. Set up the Context Surface
+
+```bash
+make setup-surface
+```
+
+This creates a Context Surface with the active domain's generated models, embeds the current Redis connection settings as the surface data source, generates an agent key, and writes `CTX_SURFACE_ID` and `MCP_AGENT_KEY` back into `.env`.
+
+### 5. Load data
+
+```bash
+make load-data
+```
+
+Pushes all records for the active domain through the Context Surfaces API, which handles Redis JSON storage and index creation.
+
+### 6. Run
+
+```bash
+make dev
+```
+
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:3040 |
+| Backend | http://localhost:8040 |
+
+Open http://localhost:3040 and try:
+
+- In `reddash`:
+  - *"Why is my order running late?"*
+  - *"How much was I charged for my last order?"*
+- In `electrohub`:
+  - *"Show me my recent ElectroHub orders."*
+  - *"Can I pick that up at my local store?"*
+
+---
+
+## Architecture
+
+```
+┌─────────────┐     SSE      ┌──────────────┐   JSON-RPC   ┌──────────────────┐
+│  React Chat │◄────────────►│   FastAPI     │◄────────────►│  Context Surfaces│
+│  (Vite)     │              │ + LangGraph   │              │  MCP Server      │
+│  :3040      │              │   :8040       │              │  (cloud)         │
+└─────────────┘              └──────┬────────┘              └───────┬──────────┘
+                                    │                               │
+                                    │ redis-py                      │
+                                    ▼                               ▼
+                             ┌──────────────┐               ┌──────────────┐
+                             │ Redis Cloud  │◄──────────────│ Auto-created │
+                             │ (your data)  │               │ Search indexes│
+                             └──────────────┘               └──────────────┘
+```
+
+**Backend** — FastAPI app with a LangGraph ReAct agent. The shared runtime loads an active `DomainPack`, exposes domain UI config to the frontend, mounts domain-defined internal tools, and fetches MCP tools from Context Surfaces at startup. Conversations are persisted via a Redis-backed LangGraph checkpointer. Responses stream to the frontend over SSE.
+
+**Frontend** — React + TypeScript + Vite. The UI shell is shared, while branding, starter prompts, placeholder text, and theme tokens are loaded from `/api/domain-config`. The chat view shows every tool call, payload, result, and duration.
+
+---
+
+## Example Data Model
+
+The `reddash` domain models a food-delivery platform with nine entity types:
+
+| Entity | Key Pattern | Key Indexed Fields |
+|--------|-------------|-------------------|
+| **Customer** | `reddash_customer:{id}` | name, email, account_status, city |
+| **Restaurant** | `reddash_restaurant:{id}` | name, cuisine_type, city, rating |
+| **Order** | `reddash_order:{id}` | customer_id, status, order_total, city |
+| **OrderItem** | `reddash_order_item:{id}` | order_id, item_name, quantity |
+| **DeliveryEvent** | `reddash_delivery_event:{id}` | order_id, event_type, actor |
+| **Driver** | `reddash_driver:{id}` | name, current_status, active_order_id |
+| **Payment** | `reddash_payment:{id}` | order_id, customer_id, payment_method |
+| **SupportTicket** | `reddash_support_ticket:{id}` | customer_id, order_id, category, status |
+| **Policy** | `reddash_policy:{id}` | title, category, content, content_embedding (vector) |
+
+Reddash schema definitions live in [`domains/reddash/schema.py`](domains/reddash/schema.py). ElectroHub schema definitions live in [`domains/electrohub/schema.py`](domains/electrohub/schema.py).
+
+---
+
+## Demo Paths
+
+See:
+
+- [`domains/reddash/docs/demo_paths.md`](domains/reddash/docs/demo_paths.md)
+- [`domains/electrohub/docs/demo_paths.md`](domains/electrohub/docs/demo_paths.md)
+
+Reddash includes four scripted conversation flows:
+
+1. **Late Order Investigation** ⭐ — 7-tool chain across orders, drivers, delivery events, and policies
+2. **Payment & Membership** — itemized charges, membership tier awareness
+3. **Support History** — ticket lookup, order drill-down, policy citation
+4. **Multi-Entity Awareness** — cross-entity aggregation (restaurants, spend, promo codes)
+
+> **Tip:** After each path, toggle to Simple RAG mode and ask the same question to see the contrast.
+
+## Presentations
+
+Keep domain-specific presentations with the domain itself:
+
+- `domains/<domain-id>/presentations/`
+
+Example:
+
+- [`domains/electrohub/presentations/director-demo/index.html`](domains/electrohub/presentations/director-demo/index.html)
+- [`domains/electrohub/presentations/director-demo/README.md`](domains/electrohub/presentations/director-demo/README.md)
+
+---
+
+## Makefile Reference
+
+| Target | Description |
+|--------|-------------|
+| `make install` | Install backend + frontend dependencies |
+| `make validate-domain DOMAIN=reddash` | Validate the chosen domain pack |
+| `make generate-models DOMAIN=reddash` | Regenerate ContextModel classes for the chosen domain |
+| `make generate-data DOMAIN=reddash` | Generate sample JSONL data in `output/<domain>` |
+| `make setup-surface DOMAIN=reddash` | Create surface + agent key using embedded Redis connection settings |
+| `make load-data DOMAIN=reddash` | Import JSONL data via Context Surfaces API |
+| `make smoke-domain DOMAIN=reddash` | Run a lightweight scaffold/data/model smoke test |
+| `make create-domain DOMAIN=electronics-store` | Scaffold a new domain pack |
+| `make backend` | Start FastAPI backend only |
+| `make frontend` | Start Vite frontend only |
+| `make dev` | Run backend + frontend together |
+| `make flush-redis` | Flush the Redis database |
+| `make reset` | Flush Redis + recreate surface + reload data |
+
+---
+
+## Project Structure
+
+```
+context-surfaces-demos/
+├── backend/app/             # Shared FastAPI + LangGraph runtime
+│   ├── core/                # Domain contract, schema types, loader
+│   ├── main.py              # App entry, SSE endpoints, /api/domain-config
+│   ├── langgraph_agent.py   # Shared ReAct agent runtime
+│   ├── context_surface_service.py  # MCP tool integration
+│   ├── rag_service.py       # Shared simple-RAG comparison mode
+│   └── settings.py          # Pydantic settings (.env loader)
+├── domains/
+│   ├── reddash/             # Delivery-support reference domain
+│   └── electrohub/          # Electronics retail reference domain
+│       ├── domain.py        # DOMAIN export implementing the contract
+│       ├── schema.py        # Entity definitions
+│       ├── prompt.py        # Domain prompt/playbooks
+│       ├── data_generator.py
+│       ├── generated_models.py
+│       ├── assets/logo.(svg|png|jpg|webp)
+│       └── docs/demo_paths.md
+│       └── presentations/   # Domain-specific decks and assets
+├── frontend/src/            # React + Vite chat UI
+│   ├── App.tsx              # Shared chat UI shell
+│   └── styles.css           # Theme-driven styles
+├── scripts/                 # Generic domain tooling
+├── tests/                   # Domain and framework smoke tests
+├── .codex/skills/domain-pack-authoring/
+│   └── SKILL.md             # Agent workflow for creating new domains
+├── Makefile                 # All build/run targets
+├── pyproject.toml           # Python dependencies
+└── .env.example             # Environment template
+```
+
+## Creating a New Domain
+
+```bash
+make create-domain DOMAIN=electronics-store
+make validate-domain DOMAIN=electronics-store
+```
+
+Then fill in `domains/electronics-store/` and follow the repo-local skill at
+[`./.codex/skills/domain-pack-authoring/SKILL.md`](.codex/skills/domain-pack-authoring/SKILL.md).
+Domain logos can be `svg`, `png`, `jpg`, `jpeg`, or `webp` as long as
+`branding.logo_path` matches the asset under `domains/<domain>/assets/`.
+If the domain has presentation material, keep it under
+`domains/<domain-id>/presentations/`.
+
+---
+
+## License
+
+MIT

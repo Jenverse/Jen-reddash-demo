@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Redis Memory Chatbot</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <main class="workspace">
+        <section class="hero-card surface-card">
+          <div class="hero-copy">
+            <p class="eyebrow">Redis Cloud Memory Demo</p>
+            <h1>Chat with session memory, searchable long-term memory, and a live trace of every call.</h1>
+            <p class="hero-body">
+              The chat writes every turn into session memory, searches long-term memory before answering,
+              and keeps the API operation log visible on the right as requests happen.
+            </p>
+          </div>
+          <div class="hero-metrics">
+            <div class="metric">
+              <span class="metric-label">Current session</span>
+              <strong id="active-session-label">Not started</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Redis memory API</span>
+              <strong id="memory-api-status">Checking…</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label">OpenAI</span>
+              <strong id="openai-status">Checking…</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="surface-card config-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Connection</p>
+              <h2>Runtime configuration</h2>
+            </div>
+            <button id="refresh-sessions-button" class="ghost-button" type="button">Refresh sessions</button>
+          </div>
+          <div class="config-grid">
+            <label>
+              <span>API base URL</span>
+              <input id="api-base-url" type="text" placeholder="https://your-api-host" />
+            </label>
+            <label>
+              <span>Store ID</span>
+              <input id="store-id" type="text" placeholder="store-123" />
+            </label>
+            <label>
+              <span>API key</span>
+              <input id="api-key" type="password" placeholder="Uses env if left blank" />
+            </label>
+            <label>
+              <span>Owner ID</span>
+              <input id="owner-id" type="text" placeholder="demo-user" />
+            </label>
+            <label>
+              <span>Actor ID</span>
+              <input id="actor-id" type="text" placeholder="web-chat" />
+            </label>
+            <label>
+              <span>Namespace</span>
+              <input id="namespace" type="text" placeholder="memory-chatbot" />
+            </label>
+            <label>
+              <span>Similarity threshold</span>
+              <input id="similarity-threshold" type="number" min="0" max="1" step="0.05" />
+            </label>
+            <label>
+              <span>Memory limit</span>
+              <input id="memory-limit" type="number" min="1" max="20" step="1" />
+            </label>
+          </div>
+          <p class="config-note">
+            Non-secret settings are saved locally in your browser. The API key stays only in memory unless you set it in <code>reddash-local/.env</code>.
+          </p>
+        </section>
+
+        <section class="chat-layout">
+          <div class="chat-column">
+            <section class="surface-card session-card">
+              <div class="session-toolbar">
+                <div class="section-heading compact">
+                  <div>
+                    <p class="eyebrow">Session memory</p>
+                    <h2>Conversation thread</h2>
+                  </div>
+                </div>
+                <div class="session-actions">
+                  <select id="session-select"></select>
+                  <button id="new-session-button" class="secondary-button" type="button">New session</button>
+                  <button id="delete-session-button" class="ghost-button" type="button">Delete</button>
+                </div>
+              </div>
+              <div id="messages" class="messages" aria-live="polite"></div>
+              <form id="composer-form" class="composer">
+                <textarea
+                  id="message-input"
+                  placeholder="Ask something that should benefit from session memory and long-term memory."
+                  rows="4"
+                ></textarea>
+                <div class="composer-footer">
+                  <p id="composer-status" class="composer-status">Ready.</p>
+                  <button id="send-button" class="primary-button" type="submit">Send message</button>
+                </div>
+              </form>
+            </section>
+
+            <section class="surface-card memory-card">
+              <div class="section-heading">
+                <div>
+                  <p class="eyebrow">Long-term memory</p>
+                  <h2>Search, create, and edit durable memories</h2>
+                </div>
+              </div>
+              <div class="memory-tools">
+                <div class="memory-search-row">
+                  <input id="memory-search-input" type="text" placeholder="Search memories by meaning" />
+                  <button id="memory-search-button" class="secondary-button" type="button">Search</button>
+                </div>
+                <div id="memory-results" class="memory-results"></div>
+              </div>
+              <div class="memory-editor">
+                <div class="memory-editor-head">
+                  <strong id="memory-editor-title">Create memory</strong>
+                  <button id="memory-reset-button" class="ghost-button" type="button">Reset</button>
+                </div>
+                <label>
+                  <span>Memory ID</span>
+                  <input id="memory-id-input" type="text" placeholder="Generated automatically for new memories" />
+                </label>
+                <label>
+                  <span>Memory text</span>
+                  <textarea id="memory-text-input" rows="4" placeholder="User prefers concise answers with shipping updates."></textarea>
+                </label>
+                <div class="config-grid compact-grid">
+                  <label>
+                    <span>Memory type</span>
+                    <select id="memory-type-input">
+                      <option value="semantic">semantic</option>
+                      <option value="episodic">episodic</option>
+                      <option value="message">message</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Topics</span>
+                    <input id="memory-topics-input" type="text" placeholder="ui, preferences, support" />
+                  </label>
+                </div>
+                <div class="memory-editor-actions">
+                  <button id="memory-create-button" class="primary-button" type="button">Save new memory</button>
+                  <button id="memory-update-button" class="secondary-button" type="button">Update selected</button>
+                  <button id="memory-delete-button" class="ghost-button" type="button">Delete selected</button>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <aside class="surface-card operations-card">
+            <div class="section-heading sticky-heading">
+              <div>
+                <p class="eyebrow">Live trace</p>
+                <h2>API operations</h2>
+              </div>
+              <button id="clear-operations-button" class="ghost-button" type="button">Clear</button>
+            </div>
+            <div id="operations" class="operations"></div>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <template id="message-template">
+      <article class="message">
+        <div class="message-meta"></div>
+        <div class="message-bubble"></div>
+      </article>
+    </template>
+
+    <template id="operation-template">
+      <details class="operation-item" open>
+        <summary class="operation-summary">
+          <div class="operation-summary-copy">
+            <span class="operation-service"></span>
+            <strong class="operation-label"></strong>
+            <span class="operation-route"></span>
+          </div>
+          <div class="operation-summary-meta">
+            <span class="operation-status"></span>
+            <span class="operation-duration"></span>
+          </div>
+        </summary>
+        <div class="operation-body">
+          <div class="operation-panel">
+            <span>Request</span>
+            <pre class="operation-request"></pre>
+          </div>
+          <div class="operation-panel">
+            <span>Response</span>
+            <pre class="operation-response"></pre>
+          </div>
+        </div>
+      </details>
+    </template>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+  </html>
