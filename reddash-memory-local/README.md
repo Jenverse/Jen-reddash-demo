@@ -96,47 +96,152 @@ make setup-surface
 
 This creates a Context Surface with the active domain's generated models, embeds the current Redis connection settings as the surface data source, generates an agent key, and writes `CTX_SURFACE_ID` and `MCP_AGENT_KEY` back into `.env`.
 
-#### How to generate agent keys
+#### Step by step: create the Context Surface and generate an agent key
 
-`make setup-surface` already does the agent-key generation for you.
+1. Make sure these values exist in `.env` before you run setup:
 
-Under the hood, [`scripts/setup_surface.py`](scripts/setup_surface.py):
+```env
+CTX_ADMIN_KEY=...
+REDIS_HOST=...
+REDIS_PORT=...
+REDIS_USERNAME=default
+REDIS_PASSWORD=...
+REDIS_DB=0
+```
 
-1. Creates or reuses the Context Surface
-2. Calls `POST /api/v1/context-surfaces/{surface_id}/agent-keys`
-3. Saves the returned key into `.env` as `MCP_AGENT_KEY`
+2. Generate the domain models first:
 
-After setup, your `.env` should contain:
+```bash
+make generate-models DOMAIN=reddash
+```
+
+3. Create or reuse the surface and generate the key:
+
+```bash
+make setup-surface
+```
+
+4. What `make setup-surface` actually does:
+
+- reads the generated models from `domains/reddash/generated_models.py`
+- creates the surface with `POST /api/v1/context-surfaces`
+- embeds your Redis connection under `data_source.connection_config`
+- creates the agent key with `POST /api/v1/context-surfaces/{surface_id}/agent-keys`
+- writes both values back into `.env`
+
+5. After setup, verify `.env` contains:
 
 ```env
 CTX_SURFACE_ID=...
 MCP_AGENT_KEY=...
 ```
 
-If you need to rotate the key for the same surface, clear `MCP_AGENT_KEY` in `.env` and rerun:
+6. Expected console output looks like:
+
+```text
+Creating context surface with embedded Redis data source...
+Creating agent key...
+
+Context surface ready.
+  Surface ID:        <surface-id>
+  Redis source:      embedded connection_config
+  Agent key saved to .env as MCP_AGENT_KEY
+```
+
+If you want a new agent key for the same surface:
 
 ```bash
+sed -i '' 's/^MCP_AGENT_KEY=.*/MCP_AGENT_KEY=/' .env
 make setup-surface
 ```
 
-If you want to force a brand-new surface and brand-new key:
+If you want a brand-new surface and a brand-new key:
 
 ```bash
 uv run python scripts/setup_surface.py --domain reddash --force-create
 ```
 
-You can also create a key manually with the admin API:
+If you already have `CTX_SURFACE_ID` and want to create a key manually:
 
 ```bash
-curl -X POST "$CTX_API_URL/api/v1/context-surfaces/$CTX_SURFACE_ID/agent-keys" \
+export CTX_API_URL="${CTX_API_URL:-https://cloud.redis.io/context-surfaces}"
+
+curl -sS -X POST "$CTX_API_URL/api/v1/context-surfaces/$CTX_SURFACE_ID/agent-keys" \
   -H "X-API-Key: $CTX_ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"name":"reddash-demo-agent"}'
 ```
 
-#### How to list and call tools once the surface exists
+#### Step by step: call MCP tools after the surface exists
 
-Once `MCP_AGENT_KEY` is set, you can discover and call the generated MCP tools directly. The backend wrapper in [`backend/app/context_surface_service.py`](backend/app/context_surface_service.py) uses the same flow.
+The MCP endpoint expects your agent key in `X-API-Key`. By default the SDK uses:
+
+```bash
+export CTX_MCP_URL="${CTX_MCP_URL:-https://gcp-us-east4.context-surfaces.redis.io/mcp}"
+export MCP_AGENT_KEY="paste-your-agent-key-here"
+```
+
+1. Initialize the MCP session:
+
+```bash
+curl -sS "$CTX_MCP_URL" \
+  -H "X-API-Key: $MCP_AGENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 0,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2024-11-05",
+      "capabilities": {},
+      "clientInfo": {
+        "name": "reddash-demo-client",
+        "version": "0.1.0"
+      }
+    }
+  }'
+```
+
+2. List the generated tools:
+
+```bash
+curl -sS "$CTX_MCP_URL" \
+  -H "X-API-Key: $MCP_AGENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list",
+    "params": {}
+  }'
+```
+
+3. Pick a tool name from that response and inspect its input schema. In the Reddash demo, one common tool is `filter_order_by_customer_id`.
+
+4. Call the tool:
+
+```bash
+curl -sS "$CTX_MCP_URL" \
+  -H "X-API-Key: $MCP_AGENT_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "filter_order_by_customer_id",
+      "arguments": {
+        "value": "CUST_DEMO_001"
+      }
+    }
+  }'
+```
+
+5. The MCP response comes back under `result`. If the tool returns text content, the backend wrapper in [`backend/app/context_surface_service.py`](backend/app/context_surface_service.py) parses that text payload into JSON before handing it to the agent.
+
+#### SDK equivalent
+
+If you prefer Python instead of raw MCP `curl` calls:
 
 ```python
 import asyncio
@@ -147,27 +252,16 @@ MCP_AGENT_KEY = "paste-your-agent-key-here"
 async def main() -> None:
     async with UnifiedClient() as client:
         tools = await client.list_tools(MCP_AGENT_KEY)
-        print("Available tools:")
-        for tool in tools:
-            tool_def = tool if isinstance(tool, dict) else tool.model_dump()
-            print(f"- {tool_def['name']}")
-
         result = await client.query_tool(
             agent_key=MCP_AGENT_KEY,
-            tool_name="get_customer",
-            arguments={"customer_id": "CUST_DEMO_001"},
+            tool_name="filter_order_by_customer_id",
+            arguments={"value": "CUST_DEMO_001"},
         )
+        print(tools)
         print(result)
 
 asyncio.run(main())
 ```
-
-Notes:
-
-- `list_tools()` returns tool names plus their input schemas.
-- `query_tool()` executes one MCP tool call using the agent key.
-- Actual tool names depend on the generated models for the active domain, so inspect `list_tools()` before choosing a tool name.
-- In this repo, the FastAPI backend loads these tools automatically and hands them to the LangGraph agent at startup.
 
 ### 5. Load data
 
