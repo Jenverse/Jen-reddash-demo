@@ -96,6 +96,79 @@ make setup-surface
 
 This creates a Context Surface with the active domain's generated models, embeds the current Redis connection settings as the surface data source, generates an agent key, and writes `CTX_SURFACE_ID` and `MCP_AGENT_KEY` back into `.env`.
 
+#### How to generate agent keys
+
+`make setup-surface` already does the agent-key generation for you.
+
+Under the hood, [`scripts/setup_surface.py`](scripts/setup_surface.py):
+
+1. Creates or reuses the Context Surface
+2. Calls `POST /api/v1/context-surfaces/{surface_id}/agent-keys`
+3. Saves the returned key into `.env` as `MCP_AGENT_KEY`
+
+After setup, your `.env` should contain:
+
+```env
+CTX_SURFACE_ID=...
+MCP_AGENT_KEY=...
+```
+
+If you need to rotate the key for the same surface, clear `MCP_AGENT_KEY` in `.env` and rerun:
+
+```bash
+make setup-surface
+```
+
+If you want to force a brand-new surface and brand-new key:
+
+```bash
+uv run python scripts/setup_surface.py --domain reddash --force-create
+```
+
+You can also create a key manually with the admin API:
+
+```bash
+curl -X POST "$CTX_API_URL/api/v1/context-surfaces/$CTX_SURFACE_ID/agent-keys" \
+  -H "X-API-Key: $CTX_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"reddash-demo-agent"}'
+```
+
+#### How to list and call tools once the surface exists
+
+Once `MCP_AGENT_KEY` is set, you can discover and call the generated MCP tools directly. The backend wrapper in [`backend/app/context_surface_service.py`](backend/app/context_surface_service.py) uses the same flow.
+
+```python
+import asyncio
+from context_surfaces import UnifiedClient
+
+MCP_AGENT_KEY = "paste-your-agent-key-here"
+
+async def main() -> None:
+    async with UnifiedClient() as client:
+        tools = await client.list_tools(MCP_AGENT_KEY)
+        print("Available tools:")
+        for tool in tools:
+            tool_def = tool if isinstance(tool, dict) else tool.model_dump()
+            print(f"- {tool_def['name']}")
+
+        result = await client.query_tool(
+            agent_key=MCP_AGENT_KEY,
+            tool_name="get_customer",
+            arguments={"customer_id": "CUST_DEMO_001"},
+        )
+        print(result)
+
+asyncio.run(main())
+```
+
+Notes:
+
+- `list_tools()` returns tool names plus their input schemas.
+- `query_tool()` executes one MCP tool call using the agent key.
+- Actual tool names depend on the generated models for the active domain, so inspect `list_tools()` before choosing a tool name.
+- In this repo, the FastAPI backend loads these tools automatically and hands them to the LangGraph agent at startup.
+
 ### 5. Load data
 
 ```bash
