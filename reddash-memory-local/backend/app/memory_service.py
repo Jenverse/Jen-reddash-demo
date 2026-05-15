@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import re
-import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -20,6 +20,24 @@ def sanitize_actor_id(value: str | None, *, fallback: str = _ACTOR_ID_FALLBACK) 
     """Normalize actor IDs to the Memory API format: alphanumeric + hyphen."""
     cleaned = re.sub(r"[^A-Za-z0-9]+", "-", (value or "").strip()).strip("-")
     return cleaned or fallback
+
+
+def utc_now_iso() -> str:
+    """Return an RFC3339 UTC timestamp compatible with current Agent Memory clients."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def extract_memory_items(payload: Any) -> list[dict[str, Any]]:
+    """Handle both legacy `memories` and current `items` search payloads."""
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("items")
+    if isinstance(items, list):
+        return items
+    memories = payload.get("memories")
+    if isinstance(memories, list):
+        return memories
+    return []
 
 
 @dataclass(frozen=True)
@@ -79,10 +97,6 @@ class MemoryService:
             detail = response.text
         raise RuntimeError(f"Memory API {response.status_code}: {detail}")
 
-    @staticmethod
-    def now_ms() -> int:
-        return int(time.time() * 1000)
-
     def search_long_term_memory(
         self,
         *,
@@ -114,10 +128,7 @@ class MemoryService:
             )
         self._raise_for_error(response)
         body = response.json() if response.content else {}
-        memories = body.get("memories", []) if isinstance(body, dict) else []
-        if not isinstance(memories, list):
-            return []
-        return memories
+        return extract_memory_items(body)
 
     async def asearch_long_term_memory(
         self,
@@ -149,10 +160,7 @@ class MemoryService:
             )
         self._raise_for_error(response)
         body = response.json() if response.content else {}
-        memories = body.get("memories", []) if isinstance(body, dict) else []
-        if not isinstance(memories, list):
-            return []
-        return memories
+        return extract_memory_items(body)
 
     def create_long_term_memory(
         self,
@@ -202,7 +210,7 @@ class MemoryService:
             "actorId": sanitize_actor_id(actor_id, fallback=connection.actor_id),
             "role": role,
             "content": [{"text": text}],
-            "createdAt": self.now_ms(),
+            "createdAt": utc_now_iso(),
             "metadata": metadata or {},
         }
         if session_id:

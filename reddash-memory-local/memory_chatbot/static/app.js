@@ -430,7 +430,7 @@ async function searchMemories(query) {
       url: buildProxyUrl("/v1/stores/{storeId}/long-term-memory/search"),
     },
   );
-  state.memoryResults = data.memories || [];
+  state.memoryResults = data.items || data.memories || [];
   renderMemoryResults();
 }
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from time import perf_counter, time
+from time import perf_counter
 from typing import Any, AsyncIterator, Literal
 
 import httpx
@@ -182,8 +183,20 @@ class Timer:
         return max(round((perf_counter() - self.started_at) * 1000), 1)
 
 
-def now_ms() -> int:
-    return int(time() * 1000)
+def now_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def extract_memory_items(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("items")
+    if isinstance(items, list):
+        return items
+    memories = payload.get("memories")
+    if isinstance(memories, list):
+        return memories
+    return []
 
 
 def sse(event_type: str, **fields: Any) -> str:
@@ -747,7 +760,7 @@ async def chat_stream(request: ChatStreamRequest) -> StreamingResponse:
             "actorId": connection.actor_id,
             "role": "USER",
             "text": message,
-            "createdAt": now_ms(),
+            "createdAt": now_utc_iso(),
             "metadata": {
                 "source": "memory-chatbot-ui",
                 **request.metadata,
@@ -790,7 +803,7 @@ async def chat_stream(request: ChatStreamRequest) -> StreamingResponse:
             )
             for event in events:
                 yield event
-            memories = memory_payload.get("memories", []) if isinstance(memory_payload, dict) else []
+            memories = extract_memory_items(memory_payload)
             yield sse("memory-search-finished", sessionId=session_id, matchCount=len(memories))
 
             final_text = ""
@@ -814,7 +827,7 @@ async def chat_stream(request: ChatStreamRequest) -> StreamingResponse:
                 "actorId": "assistant",
                 "role": "ASSISTANT",
                 "text": final_text,
-                "createdAt": now_ms(),
+                "createdAt": now_utc_iso(),
                 "metadata": {
                     "source": "memory-chatbot-ui",
                     "model": settings.openai_chat_model,
